@@ -25,7 +25,7 @@ resource "aws_security_group" "elb" {
   name = "${var.cluster_name}-elb"
 }
 
-resource "aws_security_group_rule" "allow_http_inbound" {
+resource "aws_security_group_rule" "allow_server_http_inbound" {
   type              = "ingress"
   security_group_id = "${aws_security_group.elb.id}"
 
@@ -35,7 +35,7 @@ resource "aws_security_group_rule" "allow_http_inbound" {
   cidr_blocks = ["0.0.0.0/0"]
 }
 
-resource "aws_security_group_rule" "allow_http_outbound" {
+resource "aws_security_group_rule" "allow_all_outbound" {
   type              = "egress"
   security_group_id = "${aws_security_group.elb.id}"
 
@@ -102,4 +102,14 @@ data "template_file" "user_data" {
     db_address  = "${data.terraform_remote_state.db.address}"
     db_port     = "${data.terraform_remote_state.db.port}"
   }
+}
+
+resource "aws_security_group_rule" "allow_https_inbound" {
+  type              = "ingress"
+  security_group_id = "${aws_security_group.elb.id}"
+
+  from_port   = 443
+  to_port     = 443
+  protocol    = "tcp"
+  cidr_blocks = ["0.0.0.0/0"]
 }
