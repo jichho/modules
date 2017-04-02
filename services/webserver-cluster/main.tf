@@ -11,7 +11,7 @@ resource "aws_security_group" "instance" {
 }
 
 resource "aws_launch_configuration" "example" {
-  image_id        = "ami-ee7bca8d"
+  image_id        = "${var.ami}"
   instance_type   = "${var.instance_type}"
   security_groups = ["${aws_security_group.instance.id}"]
   user_data       = "${data.template_file.user_data.rendered}"
@@ -69,6 +69,7 @@ resource "aws_elb" "example" {
 }
 
 resource "aws_autoscaling_group" "example" {
+  name = "${var.cluster_name}-${aws_launch_configuration.example.name}"
   launch_configuration = "${aws_launch_configuration.example.id}"
   availability_zones   = ["${data.aws_availability_zones.all.names}"]
   load_balancers       = ["${aws_elb.example.name}"]
@@ -76,6 +77,11 @@ resource "aws_autoscaling_group" "example" {
 
   min_size = "${var.min_size}"
   max_size = "${var.max_size}"
+  min_elb_capacity = "${var.min_size}"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 
   tag {
     key                 = "Name"
@@ -95,12 +101,15 @@ data "terraform_remote_state" "db" {
 }
 
 data "template_file" "user_data" {
+  count = "${1 - var.enable_new_user_data}"
+
   template = "${file("${path.module}/user-data.sh")}"
 
   vars {
     server_port = "${var.server_port}"
     db_address  = "${data.terraform_remote_state.db.address}"
     db_port     = "${data.terraform_remote_state.db.port}"
+    #server_text = "${var.server_text}"
   }
 }
 
@@ -112,4 +121,59 @@ resource "aws_security_group_rule" "allow_https_inbound" {
   to_port     = 443
   protocol    = "tcp"
   cidr_blocks = ["0.0.0.0/0"]
+}
+
+resource "aws_autoscaling_schedule" "scale_out_during_business_hours" {
+  count = "${var.enable_autoscaling}"
+
+  scheduled_action_name = "scale-out-during-business-hours"
+  min_size              = 2
+  max_size              = 4
+  desired_capacity      = 4
+  recurrence            = "0 9 * * *"
+
+  autoscaling_group_name = "${module.webserver_cluster.asg_name}"
+}
+
+resource "aws_autoscaling_schedule" "scale_in_at_night" {
+  count = "${var.enable_autoscaling}"
+
+  scheduled_action_name = "scale-in-at-night"
+  min_size              = 2
+  max_size              = 4 
+  desired_capacity      = 2
+  recurrence            = "0 17 * * *"
+
+  autoscaling_group_name = "${module.webserver_cluster.asg_name}"
+}
+
+resource "aws_cloudwatch_metric_alarm" "high_cpu_utilization" {
+  alarm_name = "${var.cluster_name}-high-cpu-utilization"
+  namespace = "AWS/EC2"
+  metric_mame = "CPUUtilization"
+  dimensions = {
+    AutoScalingGroupName = "${aws_autoscaling_group.example.name}"
+  }
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods = 1
+  period = 300
+  statistic = "Average"
+  threshold = 90
+  unit = "Percent"
+}
+
+resource "aws_cloudwatch_metric_alarm" "low_cpu_credit_balance" {
+  count = "${replace(replace(var.instance_type, "/^[^t].*/", "0"), "/^t.*$/", "1")}"
+  alarm_name = "${var.cluster_name}-low-cpu-credit-balance"
+  namespace = "AWS/EC2"
+  metric_name = "CPUCreditBalance"
+  dimensions = {
+    AutoScalingGroupName = "aws_autoscaling_group.example.name"
+  }
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods = 1
+  period = 300
+  statistic = "Minimum"
+  threshold = 10
+  unit = "Count"
 }
